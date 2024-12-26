@@ -8,7 +8,7 @@
    
 \SV_plus
    logic [3:0] instrs [0:M4_NUM_INSTRS-1];
-   logic [3*8-1:0] instrs_strs [0:M4_NUM_INSTRS-1];                
+   logic [1*8-1:0] instrs_strs [0:M4_NUM_INSTRS-1];                
    assign instrs = '{
       4'hF, //    First
       4'h5, //    5
@@ -61,38 +61,32 @@
       @0
          /instr_mem[20:0]
             $instr[4:0] = *instrs[instr_mem];
-            $instr_strs[3*8-1:0] = *instrs_strs[instr_mem];
-         /M4_ENTRY_HIER
+            $instr_strs[1*8-1:0] = *instrs_strs[instr_mem];
          // reset signal from instantiation of m4_makerchip_module above
          $reset = *reset;
-         \always_comb
-            
-            $data =  $reset ? 8'h0 : ($op == 4'hA) ? $sum :
-                     ($op == 4'hB) ? $dif :
-                     ($op == 4'hC) ? $prod :
-                     ($op == 4'hD) ? $quot :
-                     ($op == 4'hE) ? $tos :
-                     ($op == 4'hF) ? 8'h0 : {4'h0, /instr_mem[$pc]$instr};
+         $data[7:0] =  $reset ? 8'h0 : ($op == 4'hA) ? $sum :
+                  ($op == 4'hB) ? $dif :
+                  ($op == 4'hC) ? $prod :
+                  ($op == 4'hD) ? $quot :
+                  ($op == 4'hE) ? >>1$data :
+                  ($op == 4'hF) ? 8'h0 : {4'h0, /instr_mem[$pc]$instr};
          
          $op[3:0] = $reset ? 8'h0 : *instrs\[$pc\];
          $pc[4:0] = $reset ? 4'h0  :
                    (>>1$op == 4'hE) ? >>1$pc :
                     (>>1$pc + 1) % M4_NUM_INSTRS;
-         $sp[3:0]  = $reset ? 8'h0 : (($op == 4'hA) ? >>1$sp - 1 :
-                     ($op == 4'hB) ? >>1$sp - 1 :
-                     ($op == 4'hC) ? >>1$sp - 1 :
-                     ($op == 4'hD) ? >>1$sp - 1 :
+         $sp[3:0]  = $reset ? 8'h0 :
+                     ($op >= 4'hA && $op < 4'hE) ? >>1$sp - 1 :
                      ($op == 4'hE) ? >>1$sp :
-                     ($op == 4'hF) ? 4'h0 : >>1$sp + 1);
+                     ($op == 4'hF) ? 4'h0 : >>1$sp + 1;
          
-         $sum[7:0] = >>1$tos + >>1$nos;
-         $dif[7:0] = >>1$tos - >>1$nos;
-         $prod[7:0] = >>1$tos * >>1$nos;
-         $quot[7:0] = >>1$tos / >>1$nos;
-         $rd_en = 1'b1;
+         $sum[7:0] = $tos + $nos;
+         $dif[7:0] = $tos - $nos;
+         $prod[7:0] = $tos * $nos;
+         $quot[7:0] = $tos / $nos;
          $wr_en = 1'b1;
-         $tos[7:0]  = $reset ? 8'h0 : {4'h0, $data};
-         $nos[7:0]  = $reset ? 8'h0 : {4'h0, /top/entry[$sp-1]$data};
+         $tos[7:0]  = $reset ? 8'h0 : >>1$data;
+         $nos[7:0]  = $reset ? 8'h0 : /top|rd<>0$data;
          
          /instr_mem[20:0]
             \viz_js
@@ -111,17 +105,19 @@
                         render() {// Highlight instruction.
                                     let pc = '|example$pc'.asInt(1)
                                     this.highlighted_addr = pc
-                                    instance = this.getContext().children[pc%20]
-                                    instance1 = this.getContext().children[(pc-1)%20]
+                                    let instance = this.getContext().children[pc%20]
                                     instance.initObjects.instr_asm_box.set({fill: "#b0ffff"})
-                                    instance1.initObjects.instr_asm_box.set({fill: "#fcf3cf"})
-                                 },
-                       },
+                        },
+                        unrender() {// Unhighlight instruction.
+                                    let instance = this.getContext().children[this.highlighted_addr%20]
+                                    instance.initObjects.instr_asm_box.set({fill: "#fcf3cf"})
+                        }
+               },
                box: {strokeWidth: 0},
                where0: {left: -150, top: 40},
                layout: {left: 50}, //scope's instance stacked horizontally
                init() {
-                        let instr_str = new fabric.Text("" , {
+                        let instr_str = new fabric.Text("-" , {
                                     left: 40,
                                     fontSize: 22,
                                     fontFamily: "monospace"
@@ -135,8 +131,11 @@
                        return {instr_asm_box, instr_str}
                       },
                render() { // Instruction memory is constant, so just create it once.
-                            let instr_str = '$instr_strs'.asString("?")
-                            this.getObjects().instr_str.set({text: `${instr_str}`})
+                            if (!this.initialized) {
+                               let instr_str = '$instr_strs'.asString("?")
+                               this.getObjects().instr_str.set({text: `${instr_str}`})
+                               this.initialized = true
+                            }
                          },
          \viz_js
             // JavaScript code
@@ -398,37 +397,45 @@
             },
             render() {
                let op = '$op'.asInt()
-               let tos = '$tos'.asInt()
-               let nos = '$nos'.asInt()
-               let input1 = '>>1$tos'.asInt()
-               let input2 = '>>1$nos'.asInt()
+               let tos = '$tos'.step(1).asInt(0)
+               let nos = '$nos'.step(1).asInt(0)
+               let input1 = '$tos'.asInt()
+               let input2 = '$nos'.asInt()
                let topStack = '$sp'.asInt()
                let pc = '$pc'.asInt()
-               let stack1 = '/top/entry[5]$data'.asInt()
-               let stack2 = '/top/entry[4]$data'.asInt()
-               let stack3 = '/top/entry[3]$data'.asInt()
-               let stack4 = '/top/entry[2]$data'.asInt()
-               let stack5 = '/top/entry[1]$data'.asInt()
+               let stack1 = '/top/entry[5]<>0$data'.asInt()
+               let stack2 = '/top/entry[4]<>0$data'.asInt()
+               let stack3 = '/top/entry[3]<>0$data'.asInt()
+               let stack4 = '/top/entry[2]<>0$data'.asInt()
+               let stack5 = '/top/entry[1]<>0$data'.asInt()
+               let calc = op >= 10 && op < 14
                this.getObjects().stackval0num.set({text: stack5.toString(16).padStart(8, " ")})
                this.getObjects().stackval1num.set({text: stack4.toString(16).padStart(8, " ")})
                this.getObjects().stackval2num.set({text: stack3.toString(16).padStart(8, " ")})
                this.getObjects().stackval3num.set({text: stack2.toString(16).padStart(8, " ")})
                this.getObjects().stackval4num.set({text: stack1.toString(16).padStart(8, " ")})
-               this.getObjects().val1num.set({text: op == 10 || op == 11 || op == 12 || op == 13 ? input1.toString(16).padStart(8, " ") : " "})
-               this.getObjects().val2num.set({text: op == 10 || op == 11 || op == 12 || op == 13 ? input2.toString(16).padStart(8, " ") : " "})
-               this.getObjects().outnum.set({text: op == 10 || op == 11 || op == 12 || op == 13 ? tos.toString(16).padStart(8, " ") : " " })
+               this.getObjects().val1num.set({text: calc ? input1.toString(16).padStart(8, " ") : " "})
+               this.getObjects().val2num.set({text: calc ? input2.toString(16).padStart(8, " ") : " "})
+               this.getObjects().outnum.set({text: calc ? tos.toString(16).padStart(8, " ") : " " })
                this.getObjects().sumbox.set({fill: op == 10 ?  "#a9cce3" : "#fcf3cf"})
                this.getObjects().minbox.set({fill: op == 11 ?  "#a9cce3" : "#fcf3cf"})
                this.getObjects().prodbox.set({fill: op == 12 ? "#a9cce3" : "#fcf3cf"})
                this.getObjects().quotbox.set({fill: op == 13 ? "#a9cce3" : "#fcf3cf"})
                this.getObjects().stackPointer.set({top: -110 - 40 * (topStack - 1),})
-               this.getObjects().instr_pointer.set({left: -140 + 50 * (pc%20),})
+               this.getObjects().instr_pointer.set({left: -150 + 50 * (pc%20),})
             }
  
-   m5+array1r1w(/top, /entry, |example, @0, $wr_en, $sp, |example, @0, $rd_en, $sp, $data[7:0], )
+   |rd
+      @0
+         $rd_en = 1'b1;
+         $pnosp[3:0] = /top|example>>1$sp - 4'd1;
+   m5+array1r1w(/top, /entry, |example, @0, $wr_en, $sp, |rd, @0, $rd_en, $pnosp, $data[7:0], )
          // Assert these to end simulation (before Makerchip cycle limit).
-   *passed = *cyc_cnt > 40;      // Simulation ends after 40 cycles
-   *failed = 1'b0;
+   
+   |example
+      @1
+         *passed = ! $reset && $op == 4'hE;      // Simulation ends after 40 cycles
+         *failed = 1'b0;
 
 
 \SV
